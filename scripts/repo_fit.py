@@ -39,7 +39,15 @@ def gh(path, **params):
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
-            hint = " (rate limited: set GITHUB_TOKEN)" if e.code in (403, 429) else ""
+            hint = ""
+            if e.code in (403, 429):
+                if e.headers.get("X-RateLimit-Remaining") == "0":
+                    hint = " (rate limited: set GITHUB_TOKEN)"
+                else:  # a proxy or policy block, not a limit: a token will not help, so say what it said
+                    try:
+                        hint = f" ({json.load(e)['message']})"
+                    except (ValueError, KeyError, AttributeError):
+                        pass
             raise ApiError(f"GitHub API {e.code} for {path}{hint}")
         except (urllib.error.URLError, TimeoutError) as e:
             if attempt == 2:

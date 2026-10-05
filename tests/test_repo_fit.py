@@ -101,6 +101,23 @@ class Retry(unittest.TestCase):
         self.assertIsInstance(got, repo_fit.ApiError)
         self.assertEqual(calls, 1)
 
+    def http_403(self, headers, body=b""):
+        import io
+        import urllib.error
+        err = urllib.error.HTTPError("u", 403, "forbidden", headers, io.BytesIO(body))
+        return str(self.run_gh([err])[0])
+
+    def test_403_with_no_quota_left_suggests_a_token(self):
+        self.assertIn("set GITHUB_TOKEN", self.http_403({"X-RateLimit-Remaining": "0"}))
+
+    def test_403_that_is_not_a_rate_limit_says_what_the_api_said(self):
+        msg = self.http_403({"X-RateLimit-Remaining": "57"}, b'{"message": "path not available"}')
+        self.assertIn("path not available", msg)
+        self.assertNotIn("GITHUB_TOKEN", msg)
+
+    def test_403_with_unreadable_body_does_not_crash(self):
+        self.assertNotIn("GITHUB_TOKEN", self.http_403({}, b"not json"))
+
 
 class StateFlag(unittest.TestCase):
     def run_main(self, argv, cwd=None):
