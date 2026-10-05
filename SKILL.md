@@ -20,6 +20,10 @@ Ask which project folders to cover if the user has not said. Default to the curr
 python3 scripts/repo_fit.py profile PATH [PATH...]
 ```
 
+A project with no manifests (a repo of instructions, skills or docs) comes back with empty
+`manifests` and `dependencies`. The `context` files are then the whole profile, so read them
+properly. They are cut at 6000 characters, so open the full file if it matters.
+
 Write a short `./.repo-fit/profile.md` once, and reuse it on later runs unless a manifest changed:
 
 - One line per project: what it is, the stack, who it is for.
@@ -35,6 +39,10 @@ Never invent a project, a stack or a friction. If the profile is thin, say so in
 
 Turn the profile into 5 to 8 GitHub search queries: stack keywords, the category of tool a
 friction suggests, and one or two broader topics. Plain keywords, no marketing words.
+
+**Keep each query to 2 or 3 words.** GitHub requires every word to match, so a long query
+returns nothing (in a test run, four 4-word queries returned zero repos). If a query returns
+nothing, shorten it before concluding there is nothing out there, and say so in the report.
 
 ```
 python3 scripts/repo_fit.py search "mcp server supabase" "nextjs auth" --days 7 --min-stars 20
