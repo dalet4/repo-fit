@@ -74,5 +74,41 @@ class Profile(unittest.TestCase):
             self.assertIn("dashboard", got["context"]["README.md"])
 
 
+class Retry(unittest.TestCase):
+    def run_gh(self, side_effects):
+        from unittest import mock
+        with mock.patch("urllib.request.urlopen", side_effect=side_effects) as m:
+            try:
+                return repo_fit.gh("/repos/a/b"), m.call_count
+            except repo_fit.ApiError as e:
+                return e, m.call_count
+
+    def test_one_timeout_is_retried(self):
+        import io
+        ok = io.BytesIO(b'{"full_name": "a/b"}')
+        got, calls = self.run_gh([TimeoutError(), ok])
+        self.assertEqual((got, calls), ({"full_name": "a/b"}, 2))
+
+    def test_two_timeouts_give_an_api_error_not_a_crash(self):
+        got, calls = self.run_gh([TimeoutError(), TimeoutError()])
+        self.assertIsInstance(got, repo_fit.ApiError)
+        self.assertEqual(calls, 2)
+
+    def test_http_errors_are_not_retried(self):
+        import urllib.error
+        err = urllib.error.HTTPError("u", 404, "nf", {}, None)
+        got, calls = self.run_gh([err, err])
+        self.assertIsInstance(got, repo_fit.ApiError)
+        self.assertEqual(calls, 1)
+
+
+class ContextLimit(unittest.TestCase):
+    def test_long_instruction_file_is_kept_past_the_old_1500_cut(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "CLAUDE.md").write_text("x" * 5000 + "END")
+            ctx = repo_fit.profile([d])[0]["context"]["CLAUDE.md"]
+            self.assertEqual(len(ctx), 5003)
+
+
 if __name__ == "__main__":
     unittest.main()

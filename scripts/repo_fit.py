@@ -21,6 +21,7 @@ from pathlib import Path
 
 API = "https://api.github.com"
 CONTEXT_FILES = ("CLAUDE.md", "AGENTS.md", "README.md")
+CONTEXT_CHARS = 6000  # instruction-only repos have no manifests, so these files are the whole profile
 MANIFESTS = ("package.json", "requirements.txt", "pyproject.toml", "go.mod", "Cargo.toml", "Gemfile", "composer.json")
 
 
@@ -33,14 +34,16 @@ def gh(path, **params):
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "repo-fit"}
     if os.environ.get("GITHUB_TOKEN"):
         headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        hint = " (rate limited: set GITHUB_TOKEN)" if e.code in (403, 429) else ""
-        raise ApiError(f"GitHub API {e.code} for {path}{hint}")
-    except urllib.error.URLError as e:
-        raise ApiError(f"network error for {path}: {e.reason}")
+    for attempt in (1, 2):  # one retry: timeouts on a single lookup are common and transient
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            hint = " (rate limited: set GITHUB_TOKEN)" if e.code in (403, 429) else ""
+            raise ApiError(f"GitHub API {e.code} for {path}{hint}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == 2:
+                raise ApiError(f"network error for {path}: {getattr(e, 'reason', e)}")
 
 
 def days_since(stamp, now):
@@ -146,7 +149,7 @@ def profile(paths):
         out.append({
             "path": str(p), "name": p.resolve().name, "manifests": found,
             "dependencies": sorted({d for m in found for d in deps(p / m)})[:60],
-            "context": {c: head(p / c, 1500) for c in CONTEXT_FILES if (p / c).exists()},
+            "context": {c: head(p / c, CONTEXT_CHARS) for c in CONTEXT_FILES if (p / c).exists()},
         })
     return out
 
