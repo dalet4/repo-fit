@@ -123,7 +123,9 @@ python3 scripts/repo_fit.py record owner/repo Skip --reason wrong-stack
 On the next run, read the previous report first. A box the user ticked wins: `rejected` stays
 Skip unless something material changed, and `tried` counts as already installed.
 
-If nothing is High or Medium, still write the report and say "No strong matches today."
+If nothing is High or Medium, still write the report and say "No strong matches this run." Say it
+only when both sections are empty. A Medium counts as a match, so a report with one never says it
+(a test run did, with a Medium listed two sections below the line).
 
 ## Rules
 
