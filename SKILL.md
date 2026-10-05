@@ -33,6 +33,14 @@ Write a short `./.repo-fit/profile.md` once, and reuse it on later runs unless a
   from what you can read (installed skills folders, MCP config, package manifests), and let the
   user correct it.
 
+**Check the profile against what is live before you search.** Project notes, READMEs and
+instruction files go stale, and a stale friction sends the whole run after a problem the user no
+longer has. For each friction and each "already have" entry, confirm it against the real thing:
+the live config file, the installed tools, the manifest, the running service. In a test run, a
+project's notes said its memory was flat markdown files, but its live config had a memory
+provider enabled, so every memory repo turned out to be already covered. If you cannot check
+something, mark it `unverified` in `profile.md` and in the report.
+
 Never invent a project, a stack or a friction. If the profile is thin, say so in the report.
 
 ## 2. Search
