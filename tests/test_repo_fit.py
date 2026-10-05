@@ -102,6 +102,38 @@ class Retry(unittest.TestCase):
         self.assertEqual(calls, 1)
 
 
+class StateFlag(unittest.TestCase):
+    def run_main(self, argv, cwd=None):
+        import contextlib
+        import io
+        import os
+        old = os.getcwd()
+        if cwd:
+            os.chdir(cwd)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                repo_fit.main(argv)
+        finally:
+            os.chdir(old)
+
+    def test_state_works_before_and_after_the_subcommand(self):
+        with tempfile.TemporaryDirectory() as before, tempfile.TemporaryDirectory() as after:
+            self.run_main(["--state", before, "record", "a/b", "Skip"])
+            self.run_main(["record", "c/d", "Skip", "--state", after])
+            self.assertIn("a/b", {r["repo"] for r in repo_fit.load_history(before).values()})
+            self.assertIn("c/d", {r["repo"] for r in repo_fit.load_history(after).values()})
+
+    def test_state_before_is_not_overwritten_by_subcommand_default(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as cwd:
+            self.run_main(["--state", d, "record", "a/b", "Skip"], cwd=cwd)
+            self.assertFalse((Path(cwd) / ".repo-fit").exists())
+
+    def test_default_state_is_dot_repo_fit_in_cwd(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            self.run_main(["record", "a/b", "Skip"], cwd=cwd)
+            self.assertTrue((Path(cwd) / ".repo-fit" / "history.jsonl").exists())
+
+
 class ContextLimit(unittest.TestCase):
     def test_long_instruction_file_is_kept_past_the_old_1500_cut(self):
         with tempfile.TemporaryDirectory() as d:
