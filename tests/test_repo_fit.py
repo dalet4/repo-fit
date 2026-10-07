@@ -108,7 +108,10 @@ class Retry(unittest.TestCase):
         return str(self.run_gh([err])[0])
 
     def test_403_with_no_quota_left_suggests_a_token(self):
-        self.assertIn("set GITHUB_TOKEN", self.http_403({"X-RateLimit-Remaining": "0"}))
+        from unittest import mock
+        with mock.patch.dict("os.environ"):
+            __import__("os").environ.pop("GITHUB_TOKEN", None)
+            self.assertIn("set GITHUB_TOKEN", self.http_403({"X-RateLimit-Remaining": "0"}))
 
     def test_403_that_is_not_a_rate_limit_says_what_the_api_said(self):
         msg = self.http_403({"X-RateLimit-Remaining": "57"}, b'{"message": "path not available"}')
@@ -117,6 +120,108 @@ class Retry(unittest.TestCase):
 
     def test_403_with_unreadable_body_does_not_crash(self):
         self.assertNotIn("GITHUB_TOKEN", self.http_403({}, b"not json"))
+
+
+class RateLimit(unittest.TestCase):
+    """After GitHub says a quota is spent, later calls to that quota fail at once, without a request."""
+
+    def setUp(self):
+        from unittest import mock
+        repo_fit._LIMITED.clear()
+        env = mock.patch.dict("os.environ")
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(repo_fit._LIMITED.clear)
+        __import__("os").environ.pop("GITHUB_TOKEN", None)
+
+    def limited(self, remaining="0", reset=None, retry_after=None):
+        import io
+        import urllib.error
+        headers = {"X-RateLimit-Remaining": remaining}
+        if reset is not None:
+            headers["X-RateLimit-Reset"] = str(int(reset))
+        if retry_after is not None:
+            headers["Retry-After"] = str(retry_after)
+        return urllib.error.HTTPError("u", 403, "forbidden", headers, io.BytesIO(b'{"message": "slow down"}'))
+
+    def call(self, path, urlopen):
+        try:
+            return repo_fit.gh(path)
+        except repo_fit.ApiError as e:
+            return e
+
+    def test_after_a_spent_quota_the_next_call_makes_no_request(self):
+        import time
+        from unittest import mock
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(reset=time.time() + 3600)]) as m:
+            first = self.call("/repos/a/b", m)
+            second = self.call("/repos/a/c", m)
+        self.assertEqual(m.call_count, 1)
+        self.assertIn("rate limited", str(first))
+        self.assertIn("not retried", str(second))
+
+    def test_the_message_says_when_the_quota_returns(self):
+        from unittest import mock
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(reset=1790000000)]) as m:
+            msg = str(self.call("/repos/a/b", m))
+        self.assertIn("quota returns 14:13 UTC", msg)  # 1790000000 is 2026-09-21 14:13:20 UTC
+
+    def test_a_limited_search_quota_does_not_block_ordinary_lookups(self):
+        import io
+        import time
+        from unittest import mock
+        ok = io.BytesIO(b'{"full_name": "a/b"}')
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(reset=time.time() + 3600), ok]) as m:
+            self.call("/search/repositories", m)
+            got = self.call("/repos/a/b", m)
+        self.assertEqual((got, m.call_count), ({"full_name": "a/b"}, 2))
+
+    def test_calls_resume_once_the_reset_time_has_passed(self):
+        import io
+        import time
+        from unittest import mock
+        repo_fit._LIMITED["core"] = time.time() - 1
+        with mock.patch("urllib.request.urlopen", side_effect=[io.BytesIO(b'{"ok": 1}')]) as m:
+            self.assertEqual(self.call("/repos/a/b", m), {"ok": 1})
+
+    def test_a_retry_after_header_backs_off_even_with_quota_left(self):
+        from unittest import mock
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(remaining="50", retry_after=60)]) as m:
+            self.call("/repos/a/b", m)
+            second = self.call("/repos/a/c", m)
+        self.assertEqual(m.call_count, 1)
+        self.assertIn("not retried", str(second))
+
+    def test_without_a_reset_time_nothing_is_cached(self):
+        import io
+        from unittest import mock
+        ok = io.BytesIO(b'{"ok": 1}')
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(), ok]) as m:
+            self.call("/repos/a/b", m)
+            self.assertEqual(self.call("/repos/a/c", m), {"ok": 1})
+
+    def test_with_a_token_the_message_does_not_ask_for_one(self):
+        import time
+        from unittest import mock
+        __import__("os").environ["GITHUB_TOKEN"] = "x"
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(reset=time.time() + 60)]) as m:
+            self.assertNotIn("GITHUB_TOKEN", str(self.call("/repos/a/b", m)))
+
+    def test_one_limit_response_covers_every_remaining_facts_lookup(self):
+        import time
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d, mock.patch(
+                "urllib.request.urlopen", side_effect=[self.limited(reset=time.time() + 3600)]) as m:
+            got = [repo_fit.facts(s, d) for s in ("a/one", "a/two", "a/three")]
+        self.assertEqual(m.call_count, 1)
+        self.assertTrue(all(g["unverified"] for g in got))
+
+    def test_one_limit_response_covers_every_remaining_search_query(self):
+        import time
+        from unittest import mock
+        with mock.patch("urllib.request.urlopen", side_effect=[self.limited(reset=time.time() + 3600)]) as m:
+            out = repo_fit.search(["q1", "q2", "q3"], 7, 0, 15)
+        self.assertEqual((m.call_count, len(out["errors"]), out["candidates"]), (1, 3, []))
 
 
 class StateFlag(unittest.TestCase):
