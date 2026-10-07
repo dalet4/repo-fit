@@ -31,7 +31,10 @@ sends anonymous usage data; set `DISABLE_TELEMETRY=1` to switch that off. Review
 use, since an installed skill runs with your agent's permissions.
 
 Tested: the install lands the files and `scripts/repo_fit.py` runs from the installed location.
-Not yet tested: loading the skill inside each editor. Only Claude Code has run it end to end so far.
+Codex CLI (0.156.1) also lists the skill when it is installed in the project folder, and runs the
+`profile` helper from there; it does not list it in a folder without the install. Not yet tested:
+the search, facts and report steps in Codex, and loading the skill in any other editor. Only Claude
+Code has run it end to end so far.
 The helper is a plain command line script, so any agent that can run Python can use it.
 
 You need Python 3 and internet access. Set `GITHUB_TOKEN` to avoid the unauthenticated rate
