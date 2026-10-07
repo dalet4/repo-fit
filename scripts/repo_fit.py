@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,7 +31,21 @@ class ApiError(Exception):
     pass
 
 
+# Once GitHub says a quota is spent, calls to that part of the API fail at once until it returns, so a
+# run does not make (and wait on) dozens of requests that cannot succeed. Search and core have separate
+# quotas. In-process only, so each helper run finds out with one request.
+# ponytail: persist to --state if that one request per run ever matters.
+_LIMITED = {}  # resource ("core" or "search") -> epoch seconds when the quota returns
+
+
+def _resets(epoch):
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%H:%M UTC")
+
+
 def gh(path, **params):
+    res = "search" if path.startswith("/search") else "core"
+    if time.time() < _LIMITED.get(res, 0):
+        raise ApiError(f"GitHub API 403 for {path} (rate limited, not retried: quota returns {_resets(_LIMITED[res])})")
     url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "repo-fit"}
     if os.environ.get("GITHUB_TOKEN"):
@@ -43,12 +58,20 @@ def gh(path, **params):
             hint = ""
             if e.code in (403, 429):
                 if e.headers.get("X-RateLimit-Remaining") == "0":
-                    hint = " (rate limited: set GITHUB_TOKEN)"
+                    reset = e.headers.get("X-RateLimit-Reset") or ""
+                    until = int(reset) if reset.isdigit() else 0
+                    if until:
+                        _LIMITED[res] = until
+                    hint = " (rate limited" + ("" if os.environ.get("GITHUB_TOKEN") else ": set GITHUB_TOKEN")
+                    hint += (f"; quota returns {_resets(until)}" if until else "") + ")"
                 else:  # a proxy or policy block, not a limit: a token will not help, so say what it said
                     try:
                         hint = f" ({json.load(e)['message']})"
                     except (ValueError, KeyError, AttributeError):
                         pass
+                    wait = e.headers.get("Retry-After") or ""  # secondary limit: GitHub says how long to back off
+                    if wait.isdigit():
+                        _LIMITED[res] = time.time() + int(wait)
             raise ApiError(f"GitHub API {e.code} for {path}{hint}")
         except (urllib.error.URLError, TimeoutError) as e:
             if attempt == 2:

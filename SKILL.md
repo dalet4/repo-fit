@@ -98,6 +98,10 @@ save calls.
   non-JavaScript installers such as `setup.py` are not covered.
 - `error` with `unverified: true` means the lookup failed. Rate it on what you can see, mark it
   `unverified`, never fill in a number.
+- An error that says `rate limited` means GitHub's quota is spent. The helper then fails every
+  later call to that quota at once ("not retried") until the time in the message, so do not loop or
+  retry. Search and ordinary lookups have separate quotas. Finish with what you have, list the rest
+  as `unverified`, and put the time the quota returns in the report's `Errors` line.
 - `previously` is the last verdict. Reuse it unless something concrete changed: a new release,
   a big jump in stars, a new project it now serves, or a friction the user added. Say what
   changed. "Looked again" is not a change. This is what stops a repo being Skip on Monday and
