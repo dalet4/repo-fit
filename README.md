@@ -37,6 +37,42 @@ limit (about 10 searches a minute).
 
 Run it on a schedule with whatever you already use (a Claude Code routine, cron, a CI job).
 
+## Example report
+
+An excerpt from a real run on 2026-10-05, with the project details generalised. The run reviewed
+17 repos for a Next.js and Supabase dashboard and found nothing worth a High.
+
+```
+Summary: 17 reviewed · 0 High · 1 Medium · 16 skipped
+Profile: 2026-10-05 (new, `.repo-fit/profile.md`)
+
+## Notes on the run
+- Search worked: 8 queries (2 to 3 words), `--days 7 --min-stars 20`, 66 candidates, no errors.
+  Most were noise; 12 got a `facts` lookup.
+- One friction in the profile came from the project's notes and could not be checked live (no
+  database access in a read-only run), so it is marked **unverified**.
+
+## High
+None.
+
+## Medium
+**Farenhytee/database-sentinel** ⭐ 48 · MIT · pushed 2026-10-05: read-only Supabase RLS and
+exposed-key audit (MCP server, CLI and Claude skill) that returns fix SQL. It fits a dashboard
+holding customer data. It overlaps with the Supabase advisors and a security skill that is already
+installed, and it is only 7 months old. It would be promoted if a read-only trial on a throwaway
+branch finds gaps those two miss.
+
+## Skipped
+ohad6k/VibeRaven (already-covered), happyDomain/happydeliver (licence: unclear), supabase/cli
+(licence: none reported by the API), DBDiff/DBDiff (no-fit), ozgurcd/gograph (wrong-stack),
+czlonkowski/n8n-mcp (already-covered), and 10 more
+
+Not reviewed, not recorded: the other ~54 search hits were off-topic and never got a `facts` lookup.
+```
+
+A High entry also gets a project, a friction, a first step and three tick boxes
+(`tried`, `parked`, `rejected`). Ticked boxes are read on the next run.
+
 ## The helper
 
 ```

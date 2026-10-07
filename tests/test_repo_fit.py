@@ -159,5 +159,116 @@ class ContextLimit(unittest.TestCase):
             self.assertEqual(len(ctx), 5003)
 
 
+def api_repo(slug="o/r", **kw):
+    """A GitHub /repos object with everything facts() reads."""
+    base = repo(full_name=slug, html_url="https://github.com/" + slug, description="d", topics=["t"])
+    base.update(kw)
+    return base
+
+
+class Search(unittest.TestCase):
+    def run_search(self, responses, queries=("a b", "c d"), **kw):
+        """Run search() with gh() patched. responses: one dict (or ApiError) per gh call, in order."""
+        from unittest import mock
+        calls = []
+
+        def fake_gh(path, **params):
+            calls.append((path, params))
+            r = responses[len(calls) - 1]
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        args = {"days": 7, "min_stars": 5, "limit": 15}
+        args.update(kw)
+        with mock.patch.object(repo_fit, "gh", side_effect=fake_gh):
+            return repo_fit.search(list(queries), **args), calls
+
+    def item(self, slug, stars=100):
+        return {"full_name": slug, "stargazers_count": stars, "description": "x", "pushed_at": "2026-10-01T00:00:00Z"}
+
+    def test_builds_the_query_with_window_star_floor_sort_and_limit(self):
+        from datetime import date, timedelta
+        _, calls = self.run_search([{"items": []}], queries=["mcp server"], days=10, min_stars=20, limit=3)
+        path, params = calls[0]
+        self.assertEqual(path, "/search/repositories")
+        self.assertEqual((params["sort"], params["order"], params["per_page"]), ("updated", "desc", 3))
+        m = __import__("re").fullmatch(r"mcp server pushed:>(\d{4}-\d{2}-\d{2}) stars:>=20", params["q"])
+        self.assertIsNotNone(m, params["q"])
+        age = (datetime.now(timezone.utc).date() - date.fromisoformat(m.group(1))).days
+        self.assertIn(age, (10, 11))  # 11 only if the clock crossed midnight during the test
+
+    def test_candidates_carry_the_fields_the_skill_needs_and_the_query_that_found_them(self):
+        out, _ = self.run_search([{"items": [self.item("a/one", 42)]}], queries=["q1"])
+        self.assertEqual(out["errors"], [])
+        self.assertEqual(out["candidates"], [{"repo": "a/one", "stars": 42, "description": "x",
+                                              "pushed_at": "2026-10-01T00:00:00Z", "query": "q1"}])
+
+    def test_a_repo_found_by_two_queries_appears_once_under_the_first(self):
+        out, _ = self.run_search([{"items": [self.item("a/one"), self.item("a/two")]},
+                                  {"items": [self.item("a/two"), self.item("a/three")]}])
+        self.assertEqual([c["repo"] for c in out["candidates"]], ["a/one", "a/two", "a/three"])
+        self.assertEqual(out["candidates"][1]["query"], "a b")
+
+    def test_a_failing_query_is_reported_and_the_rest_still_run(self):
+        out, calls = self.run_search([repo_fit.ApiError("GitHub API 500 for /search/repositories"),
+                                      {"items": [self.item("a/ok")]}])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([c["repo"] for c in out["candidates"]], ["a/ok"])
+        self.assertEqual(len(out["errors"]), 1)
+        self.assertIn("500", out["errors"][0])
+
+    def test_no_results_is_an_empty_list_not_an_error(self):
+        out, _ = self.run_search([{"items": []}, {"items": []}])
+        self.assertEqual(out, {"candidates": [], "errors": []})
+
+
+class Facts(unittest.TestCase):
+    def run_facts(self, slug="o/r", state=None, personal=False, api=None):
+        from unittest import mock
+        api = api_repo() if api is None else api
+        with tempfile.TemporaryDirectory() as d:
+            target = state or d
+            with mock.patch.object(repo_fit, "gh", side_effect=[api]):  # a list item that is an exception is raised
+                return repo_fit.facts(slug, target, personal)
+
+    def test_reports_the_fields_and_an_empty_gate_list_for_a_clean_repo(self):
+        got = self.run_facts(api=api_repo("o/r", stargazers_count=1234))
+        self.assertEqual((got["repo"], got["stars"], got["licence"], got["gates"], got["previously"]),
+                         ("o/r", 1234, "MIT", [], None))
+        self.assertEqual(got["url"], "https://github.com/o/r")
+        self.assertEqual(got["topics"], ["t"])
+
+    def test_a_repo_with_no_licence_reports_none_and_the_gate(self):
+        got = self.run_facts(api=api_repo(license=None))
+        self.assertIsNone(got["licence"])
+        self.assertIn("no-licence", got["gates"])
+
+    def test_gates_are_applied_to_what_the_api_returned(self):
+        got = self.run_facts(api=api_repo(archived=True, pushed_at="2020-01-01T00:00:00Z"))
+        self.assertEqual(sorted(got["gates"]), ["archived", "unmaintained"])
+
+    def test_personal_flag_reaches_the_gates(self):
+        nc = api_repo(license={"spdx_id": "CC-BY-NC-4.0"})
+        self.assertIn("noncommercial", self.run_facts(api=nc)["gates"])
+        self.assertNotIn("noncommercial", self.run_facts(api=nc, personal=True)["gates"])
+
+    def test_an_api_failure_is_marked_unverified_and_keeps_the_earlier_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo_fit.record("o/r", "Skip", "wrong-stack", d, today="2026-09-01")
+            got = self.run_facts(state=d, api=repo_fit.ApiError("GitHub API 404 for /repos/o/r"))
+        self.assertTrue(got["unverified"])
+        self.assertIn("404", got["error"])
+        self.assertEqual(got["previously"]["verdict"], "Skip")
+        self.assertNotIn("stars", got)
+
+    def test_the_earlier_verdict_is_found_whatever_the_case_of_the_slug(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo_fit.record("Owner/Repo", "Medium", "watch", d, today="2026-09-01")
+            got = self.run_facts(slug="owner/repo", state=d, api=api_repo("Owner/Repo"))
+        self.assertEqual(got["previously"]["verdict"], "Medium")
+        self.assertEqual(got["previously"]["date"], "2026-09-01")
+
+
 if __name__ == "__main__":
     unittest.main()
