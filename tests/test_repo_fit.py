@@ -270,5 +270,74 @@ class Facts(unittest.TestCase):
         self.assertEqual(got["previously"]["date"], "2026-09-01")
 
 
+BUSL_TEXT = "License text copyright (c) 2020 MariaDB\n\"Business Source License\" is a trademark of MariaDB\n"
+N8N_TEXT = ("# License\n\nPortions of this software are licensed as follows:\n\n"
+            "- Content under the Sustainable Use License\n")
+
+
+class LicenceFit(unittest.TestCase):
+    def facts_for(self, spdx, use=None, personal=False, text=None, text_error=None):
+        """Run facts() on a repo with this SPDX id; `text` is what the LICENSE endpoint serves."""
+        from base64 import b64encode
+        from unittest import mock
+        lic = {"spdx_id": spdx} if spdx else None
+        responses = [api_repo(license=lic)]
+        if text_error:
+            responses.append(text_error)
+        elif text is not None:
+            responses.append({"content": b64encode(text.encode()).decode()})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(repo_fit, "gh", side_effect=responses) as m:
+            return repo_fit.facts("o/r", d, personal, use), m.call_count
+
+    def test_each_class_in_each_use(self):
+        gate, review, ok = "gate", "review", "ok"
+        expected = {  # spdx: (personal, internal, client, saas)
+            "MIT": (ok, ok, ok, ok),
+            "LGPL-3.0": (ok, ok, review, review),
+            "GPL-3.0": (ok, ok, review, review),
+            "AGPL-3.0": (ok, review, review, review),
+            "BUSL-1.1": (ok, review, gate, gate),
+            "CC-BY-NC-4.0": (ok, gate, gate, gate),
+        }
+        for spdx, levels in expected.items():
+            for use, level in zip(repo_fit.USES, levels):
+                got, _ = self.facts_for(spdx, use=use)
+                seen = gate if got["gates"] and "licence-unclear" not in got["gates"] else (review if got["licence_review"] else ok)
+                self.assertEqual(seen, level, f"{spdx} for {use}")
+
+    def test_a_clean_licence_costs_no_extra_api_call(self):
+        got, calls = self.facts_for("MIT")
+        self.assertEqual((calls, got["licence_class"], got["use_mode"]), (1, "permissive", "client"))
+
+    def test_noassertion_with_business_source_text_is_source_available_and_gated_for_clients(self):
+        got, calls = self.facts_for("NOASSERTION", text=BUSL_TEXT)
+        self.assertEqual((calls, got["licence_class"], got["gates"]), (2, "source-available", ["source-available"]))
+
+    def test_a_mixed_licence_file_is_open_core_even_when_it_also_names_a_source_available_licence(self):
+        got, _ = self.facts_for("NOASSERTION", text=N8N_TEXT)
+        self.assertEqual((got["licence_class"], got["gates"]), ("open-core-mixed", []))
+        self.assertEqual(len(got["licence_review"]), 1)
+
+    def test_unrecognised_text_is_unknown_and_quotes_the_first_line(self):
+        got, _ = self.facts_for("Other", text="\n\nAcme Public Licence v9\nDo what you like.")
+        self.assertEqual((got["licence_class"], got["gates"]), ("unknown", ["licence-unclear"]))
+        self.assertIn("Acme Public Licence v9", got["licence_note"])
+
+    def test_no_licence_endpoint_answer_is_unknown_not_a_crash(self):
+        got, _ = self.facts_for("NOASSERTION", text_error=repo_fit.ApiError("GitHub API 404 for /repos/o/r/license"))
+        self.assertEqual((got["licence_class"], got["gates"]), ("unknown", ["licence-unclear"]))
+
+    def test_personal_flag_is_the_same_as_use_personal(self):
+        a, _ = self.facts_for("CC-BY-NC-4.0", personal=True)
+        b, _ = self.facts_for("CC-BY-NC-4.0", use="personal")
+        self.assertEqual((a["gates"], a["use_mode"]), (b["gates"], b["use_mode"]))
+        self.assertEqual(a["gates"], [])
+
+    def test_boost_is_not_business_source_and_lgpl_is_not_gpl(self):
+        self.assertEqual(repo_fit.classify_spdx("BSL-1.0"), "permissive")
+        self.assertEqual(repo_fit.classify_spdx("LGPL-2.1"), "weak-copyleft")
+        self.assertEqual(repo_fit.classify_spdx("GPL-2.0-or-later"), "strong-copyleft")
+
+
 if __name__ == "__main__":
     unittest.main()

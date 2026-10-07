@@ -9,6 +9,7 @@
 All output is JSON on stdout. Set GITHUB_TOKEN for a higher API rate limit.
 """
 import argparse
+import base64
 import json
 import os
 import re
@@ -58,9 +59,81 @@ def days_since(stamp, now):
     return (now - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).days
 
 
-def gates(repo, now=None, personal=False):
-    """Hard-skip flags for a GitHub API repo object. Empty list means it passes."""
+# What a licence class means per way of using the repo: ok, review (judge must address it) or gate
+# (hard Skip). Not legal advice. One row per class, so a wrong cell is a one-line fix.
+USES = ("personal", "internal", "client", "saas")
+DEFAULT_USE = "client"  # the strictest common case; the report must say it was assumed
+FIT = {
+    "permissive":       dict(zip(USES, ("ok", "ok", "ok", "ok"))),
+    "weak-copyleft":    dict(zip(USES, ("ok", "ok", "review", "review"))),
+    "strong-copyleft":  dict(zip(USES, ("ok", "ok", "review", "review"))),
+    "network-copyleft": dict(zip(USES, ("ok", "review", "review", "review"))),
+    "source-available": dict(zip(USES, ("ok", "review", "gate", "gate"))),
+    "noncommercial":    dict(zip(USES, ("ok", "gate", "gate", "gate"))),
+    "open-core-mixed":  dict(zip(USES, ("review",) * 4)),
+    "unknown":          dict(zip(USES, ("gate",) * 4)),
+}
+CLASS_NOTE = {
+    "permissive": "permissive: few conditions beyond keeping the notice",
+    "weak-copyleft": "weak copyleft: changes to the library itself usually have to be shared",
+    "strong-copyleft": "strong copyleft: code you ship that includes it usually has to be shared under the same licence",
+    "network-copyleft": "network copyleft (AGPL): hosting it for others usually triggers the share obligation too",
+    "source-available": "source-available: not open source; commercial or competing use is usually restricted",
+    "noncommercial": "non-commercial: not for paid work",
+    "open-core-mixed": "mixed: different parts of the repo carry different licences; read which part you would use",
+    "unknown": "licence not recognised: read the LICENSE file",
+}
+# Checked in this order, first match wins: a mixed LICENSE can also name a source-available one below.
+TEXT_CLASSES = (
+    ("open-core-mixed", ("portions of this software are licensed as follows",)),
+    ("noncommercial", ("noncommercial", "non-commercial")),
+    ("source-available", ("business source license", "server side public license", "elastic license",
+                          "functional source license", "commons clause", "sustainable use license")),
+)
+PERMISSIVE = {"mit", "mit-0", "apache-2.0", "bsd-2-clause", "bsd-3-clause", "isc", "unlicense", "0bsd",
+              "cc0-1.0", "zlib", "bsl-1.0", "wtfpl", "python-2.0", "psf-2.0", "blueoak-1.0.0", "cc-by-4.0",
+              "upl-1.0", "mulanpsl-2.0", "bsd-3-clause-clear", "artistic-2.0", "postgresql"}
+
+
+def classify_spdx(spdx):
+    s = (spdx or "").lower()
+    if re.search(r"(^|-)nc(-|$)|noncommercial", s):
+        return "noncommercial"
+    if s.startswith("agpl"):
+        return "network-copyleft"
+    if s.startswith(("lgpl", "mpl", "epl", "cddl", "cecill")):
+        return "weak-copyleft"
+    if s.startswith("gpl"):
+        return "strong-copyleft"
+    if s.startswith(("busl", "sspl", "elastic", "fsl")):
+        return "source-available"
+    return "permissive" if s in PERMISSIVE else "unknown"
+
+
+def classify_text(text):
+    """Class named by a LICENSE file's own words, or None when no known phrase appears."""
+    low = (text or "").lower()
+    for cls, phrases in TEXT_CLASSES:
+        if any(p in low for p in phrases):
+            return cls
+    return None
+
+
+def license_text(slug):
+    """LICENSE file text as GitHub serves it (one call), or None if unavailable."""
+    try:
+        return base64.b64decode(gh(f"/repos/{slug}/license")["content"]).decode("utf-8", "replace")[:20000]
+    except (ApiError, KeyError, ValueError):
+        return None
+
+
+def gates(repo, now=None, personal=False, use=None, lclass=None):
+    """Hard-skip flags for a GitHub API repo object. Empty list means it passes.
+
+    `lclass` is the licence class when the caller already resolved it from the LICENSE text.
+    """
     now = now or datetime.now(timezone.utc)
+    use = "personal" if personal else (use or DEFAULT_USE)
     flags = []
     if repo.get("archived"):
         flags.append("archived")
@@ -69,10 +142,10 @@ def gates(repo, now=None, personal=False):
     lic = (repo.get("license") or {}).get("spdx_id")
     if not lic:
         flags.append("no-licence")
-    elif lic in ("NOASSERTION", "Other"):
-        flags.append("licence-unclear")  # open the LICENSE file before trusting it
-    elif re.search(r"(^|-)NC(-|$)|noncommercial", lic, re.I) and not personal:
-        flags.append("noncommercial")
+    else:
+        cls = lclass or classify_spdx(lic)
+        if FIT[cls][use] == "gate":
+            flags.append("licence-unclear" if cls == "unknown" else cls)
     young = days_since(repo["created_at"], now) < 14
     if young and repo.get("stargazers_count", 0) < 50 and (repo.get("owner") or {}).get("type") == "User":
         flags.append("too-new")
@@ -98,17 +171,26 @@ def record(repo, verdict, reason, state, today=None):
     return row
 
 
-def facts(slug, state, personal=False):
+def facts(slug, state, personal=False, use=None):
     prev = load_history(state).get(slug.lower())
     try:
         r = gh(f"/repos/{slug}")
     except ApiError as e:
         return {"repo": slug, "error": str(e), "unverified": True, "previously": prev}
+    use = "personal" if personal else (use or DEFAULT_USE)
+    spdx = (r.get("license") or {}).get("spdx_id")
+    text = license_text(r["full_name"]) if spdx in ("NOASSERTION", "Other") else None  # only the unclear ones cost a call
+    cls = classify_text(text) or classify_spdx(spdx)
+    note = CLASS_NOTE[cls]
+    if cls == "unknown" and text:
+        note += ". LICENSE starts: " + next((ln.strip() for ln in text.splitlines() if ln.strip()), "")[:120]
+    review = [f"{CLASS_NOTE[cls]} (use: {use})"] if FIT[cls][use] == "review" else []
     return {
         "repo": r["full_name"], "url": r["html_url"], "description": r.get("description"),
-        "stars": r["stargazers_count"], "licence": (r.get("license") or {}).get("spdx_id"),
+        "stars": r["stargazers_count"], "licence": spdx,
+        "licence_class": cls, "licence_note": note, "licence_review": review, "use_mode": use,
         "pushed_at": r["pushed_at"], "created_at": r["created_at"], "topics": r.get("topics", []),
-        "gates": gates(r, personal=personal), "previously": prev,
+        "gates": gates(r, personal=personal, use=use, lclass=cls), "previously": prev,
     }
 
 
@@ -178,7 +260,8 @@ def main(argv=None):
     s.add_argument("--limit", type=int, default=15)
     f = sub.add_parser("facts", parents=[shared])
     f.add_argument("repos", nargs="+")
-    f.add_argument("--personal", action="store_true", help="non-commercial licences are fine")
+    f.add_argument("--use", choices=USES, help=f"how the repo will be used (default {DEFAULT_USE})")
+    f.add_argument("--personal", action="store_true", help="same as --use personal")
     r = sub.add_parser("record", parents=[shared])
     r.add_argument("repo")
     r.add_argument("verdict", choices=["High", "Medium", "Skip"])
@@ -190,7 +273,7 @@ def main(argv=None):
     elif a.cmd == "search":
         res = search(a.queries, a.days, a.min_stars, a.limit)
     elif a.cmd == "facts":
-        res = [facts(x, a.state, a.personal) for x in a.repos]
+        res = [facts(x, a.state, a.personal, a.use) for x in a.repos]
     else:
         res = record(a.repo, a.verdict, a.reason, a.state)
     json.dump(res, sys.stdout, indent=2)
