@@ -1,6 +1,8 @@
 ---
 name: repo-fit
 description: Find GitHub repos worth adopting for the projects in a folder, and score each as High, Medium or Skip with a reason. Reads the user's projects, searches GitHub for recently active repos, checks real stars, licence and activity, then writes a dated report. Use when asked to "find repos for my projects", "what should I be using", "scout GitHub", or on a daily or weekly schedule.
+license: MIT
+compatibility: Needs Python 3 (standard library only) and internet access. GITHUB_TOKEN is optional but avoids the unauthenticated search rate limit.
 ---
 
 # repo-fit
