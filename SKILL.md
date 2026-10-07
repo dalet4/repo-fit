@@ -59,6 +59,10 @@ python3 scripts/repo_fit.py search "mcp server supabase" "nextjs auth" --days 7 
 Raise `--days` for a weekly run. Without a token the search API allows about 10 queries a minute;
 set `GITHUB_TOKEN` if you hit the limit.
 
+**Keep the exact queries.** You write them fresh each run and they are saved nowhere else, so a
+report that omits them cannot be repeated or checked. They go in the report's `## Search` block
+(section 5).
+
 ## 3. Facts before opinions
 
 ```
@@ -98,6 +102,11 @@ Write `./repo-fit-reports/YYYY-MM-DD.md`:
 ```
 Summary: X reviewed · Y High · Z Medium · N skipped
 Profile: <date profile.md was last changed>
+
+## Search
+Command: python3 scripts/repo_fit.py search "query one" "query two" ... --days 7 --min-stars 20
+Candidates: N from M queries, K got a `facts` lookup. Queries that returned nothing: ... (or none)
+Errors: ... (or none)
 
 ## High
 **owner/repo** ⭐ stars · licence · pushed date
