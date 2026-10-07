@@ -229,7 +229,8 @@ class Facts(unittest.TestCase):
         api = api_repo() if api is None else api
         with tempfile.TemporaryDirectory() as d:
             target = state or d
-            with mock.patch.object(repo_fit, "gh", side_effect=[api]):  # a list item that is an exception is raised
+            quiet = [{"created_at": "2015-01-01T00:00:00Z"}, repo_fit.ApiError("GitHub API 404 for /contents")]
+            with mock.patch.object(repo_fit, "gh", side_effect=[api, *quiet]):  # a list item that is an exception is raised
                 return repo_fit.facts(slug, target, personal)
 
     def test_reports_the_fields_and_an_empty_gate_list_for_a_clean_repo(self):
@@ -277,17 +278,28 @@ N8N_TEXT = ("# License\n\nPortions of this software are licensed as follows:\n\n
 
 class LicenceFit(unittest.TestCase):
     def facts_for(self, spdx, use=None, personal=False, text=None, text_error=None):
-        """Run facts() on a repo with this SPDX id; `text` is what the LICENSE endpoint serves."""
+        """Run facts() on a repo with this SPDX id; `text` is what the LICENSE endpoint serves.
+
+        Returns (result, paths of every GitHub call made).
+        """
         from base64 import b64encode
         from unittest import mock
-        lic = {"spdx_id": spdx} if spdx else None
-        responses = [api_repo(license=lic)]
-        if text_error:
-            responses.append(text_error)
-        elif text is not None:
-            responses.append({"content": b64encode(text.encode()).decode()})
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(repo_fit, "gh", side_effect=responses) as m:
-            return repo_fit.facts("o/r", d, personal, use), m.call_count
+        calls = []
+
+        def fake(path, **kw):
+            calls.append(path)
+            if path.endswith("/license"):
+                if text_error or text is None:
+                    raise text_error or repo_fit.ApiError("GitHub API 404 for " + path)
+                return {"content": b64encode(text.encode()).decode()}
+            if path.startswith("/users/"):
+                return {"created_at": "2015-01-01T00:00:00Z"}
+            if path.endswith("package.json"):
+                raise repo_fit.ApiError("GitHub API 404 for " + path)
+            return api_repo(license={"spdx_id": spdx} if spdx else None)
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(repo_fit, "gh", side_effect=fake):
+            return repo_fit.facts("o/r", d, personal, use), calls
 
     def test_each_class_in_each_use(self):
         gate, review, ok = "gate", "review", "ok"
@@ -307,11 +319,13 @@ class LicenceFit(unittest.TestCase):
 
     def test_a_clean_licence_costs_no_extra_api_call(self):
         got, calls = self.facts_for("MIT")
-        self.assertEqual((calls, got["licence_class"], got["use_mode"]), (1, "permissive", "client"))
+        self.assertNotIn("/repos/o/r/license", calls)
+        self.assertEqual((got["licence_class"], got["use_mode"]), ("permissive", "client"))
 
     def test_noassertion_with_business_source_text_is_source_available_and_gated_for_clients(self):
         got, calls = self.facts_for("NOASSERTION", text=BUSL_TEXT)
-        self.assertEqual((calls, got["licence_class"], got["gates"]), (2, "source-available", ["source-available"]))
+        self.assertIn("/repos/o/r/license", calls)
+        self.assertEqual((got["licence_class"], got["gates"]), ("source-available", ["source-available"]))
 
     def test_a_mixed_licence_file_is_open_core_even_when_it_also_names_a_source_available_licence(self):
         got, _ = self.facts_for("NOASSERTION", text=N8N_TEXT)
@@ -337,6 +351,71 @@ class LicenceFit(unittest.TestCase):
         self.assertEqual(repo_fit.classify_spdx("BSL-1.0"), "permissive")
         self.assertEqual(repo_fit.classify_spdx("LGPL-2.1"), "weak-copyleft")
         self.assertEqual(repo_fit.classify_spdx("GPL-2.0-or-later"), "strong-copyleft")
+
+
+class Extras(unittest.TestCase):
+    OWNER = {"type": "Organization", "login": "o"}
+
+    def run_extras(self, user=None, pkg=None):
+        """extras() on a repo whose user and package.json lookups answer with these (or raise if an exception)."""
+        from base64 import b64encode
+        from unittest import mock
+        answers = {"/users/o": user, "/repos/o/r/contents/package.json":
+                   {"content": b64encode(pkg.encode()).decode()} if isinstance(pkg, str) else pkg}
+
+        def fake(path, **kw):
+            got = answers[path]
+            if isinstance(got, Exception):
+                raise got
+            return got
+
+        with mock.patch.object(repo_fit, "gh", side_effect=fake):
+            return repo_fit.extras(api_repo(owner=self.OWNER), NOW)
+
+    NOT_FOUND = repo_fit.ApiError("GitHub API 404 for /x")
+
+    def test_owner_age_is_days_since_the_account_was_created(self):
+        got = self.run_extras({"created_at": "2026-09-24T00:00:00Z"}, self.NOT_FOUND)
+        self.assertEqual(got["owner_age_days"], 10)
+
+    def test_install_hooks_are_listed_in_lifecycle_order_and_other_scripts_ignored(self):
+        pkg = '{"scripts": {"test": "x", "postinstall": "a", "preinstall": "b", "build": "c"}}'
+        got = self.run_extras({"created_at": "2020-01-01T00:00:00Z"}, pkg)
+        self.assertEqual(got["install_scripts"], ["preinstall", "postinstall"])
+
+    def test_a_package_json_with_no_hooks_is_empty_not_unchecked(self):
+        self.assertEqual(self.run_extras({"created_at": "2020-01-01T00:00:00Z"}, '{"scripts": {"test": "x"}}')["install_scripts"], [])
+        self.assertEqual(self.run_extras({"created_at": "2020-01-01T00:00:00Z"}, '{"name": "x"}')["install_scripts"], [])
+
+    def test_no_package_json_is_unchecked_and_not_an_error(self):
+        got = self.run_extras({"created_at": "2020-01-01T00:00:00Z"}, self.NOT_FOUND)
+        self.assertIsNone(got["install_scripts"])
+        self.assertNotIn("extras_error", got)
+
+    def test_unreadable_package_json_is_unchecked(self):
+        for bad in ("not json", '["a"]', '{"scripts": "x"}'):
+            self.assertIsNone(self.run_extras({"created_at": "2020-01-01T00:00:00Z"}, bad)["install_scripts"], bad)
+
+    def test_a_failed_lookup_is_unchecked_and_says_why(self):
+        limited = repo_fit.ApiError("GitHub API 403 for /users/o (rate limited: set GITHUB_TOKEN)")
+        got = self.run_extras(limited, self.NOT_FOUND)
+        self.assertIsNone(got["owner_age_days"])
+        self.assertIn("rate limited", got["extras_error"])
+
+    def test_a_gated_repo_makes_no_extra_calls(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(repo_fit, "gh", side_effect=[api_repo(archived=True)]) as m:
+            got = repo_fit.facts("o/r", d)
+        self.assertEqual((m.call_count, "owner_age_days" in got), (1, False))
+
+    def test_a_clean_repo_reports_both_facts_through_facts(self):
+        from unittest import mock
+        pkg = {"content": __import__("base64").b64encode(b'{"scripts": {"install": "x"}}').decode()}
+        answers = [api_repo(owner=self.OWNER), {"created_at": "2026-10-03T00:00:00Z"}, pkg]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(repo_fit, "gh", side_effect=answers):
+            got = repo_fit.facts("o/r", d)
+        self.assertEqual((got["install_scripts"], got["gates"]), (["install"], []))
+        self.assertIsInstance(got["owner_age_days"], int)
 
 
 if __name__ == "__main__":

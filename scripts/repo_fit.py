@@ -171,6 +171,43 @@ def record(repo, verdict, reason, state, today=None):
     return row
 
 
+INSTALL_HOOKS = ("preinstall", "install", "postinstall")
+
+
+def lookup(path):
+    """(data, error). A 404 is an ordinary 'not there', so it carries no error."""
+    try:
+        return gh(path), None
+    except ApiError as e:
+        return None, (None if "API 404" in str(e) else str(e))
+
+
+def extras(r, now=None):
+    """Plain observed facts, never a verdict: owner account age and root package.json install hooks.
+
+    None means not checked (no root package.json, bad JSON, or the lookup failed).
+    """
+    now = now or datetime.now(timezone.utc)
+    out, errors = {"owner_age_days": None, "install_scripts": None}, []
+    login = (r.get("owner") or {}).get("login")
+    if login:
+        user, err = lookup(f"/users/{login}")
+        errors += [err] if err else []
+        if user and user.get("created_at"):
+            out["owner_age_days"] = days_since(user["created_at"], now)
+    pkg, err = lookup(f"/repos/{r['full_name']}/contents/package.json")
+    errors += [err] if err else []
+    try:
+        scripts = json.loads(base64.b64decode(pkg["content"])).get("scripts", {})
+        if isinstance(scripts, dict):
+            out["install_scripts"] = [h for h in INSTALL_HOOKS if h in scripts]
+    except (TypeError, KeyError, ValueError, AttributeError):
+        pass
+    if errors:
+        out["extras_error"] = "; ".join(errors)
+    return out
+
+
 def facts(slug, state, personal=False, use=None):
     prev = load_history(state).get(slug.lower())
     try:
@@ -185,12 +222,14 @@ def facts(slug, state, personal=False, use=None):
     if cls == "unknown" and text:
         note += ". LICENSE starts: " + next((ln.strip() for ln in text.splitlines() if ln.strip()), "")[:120]
     review = [f"{CLASS_NOTE[cls]} (use: {use})"] if FIT[cls][use] == "review" else []
+    flags = gates(r, personal=personal, use=use, lclass=cls)
     return {
         "repo": r["full_name"], "url": r["html_url"], "description": r.get("description"),
         "stars": r["stargazers_count"], "licence": spdx,
         "licence_class": cls, "licence_note": note, "licence_review": review, "use_mode": use,
         "pushed_at": r["pushed_at"], "created_at": r["created_at"], "topics": r.get("topics", []),
-        "gates": gates(r, personal=personal, use=use, lclass=cls), "previously": prev,
+        "gates": flags, "previously": prev,
+        **({} if flags else extras(r)),  # a repo already Skipped needs no further calls
     }
 
 

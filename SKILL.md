@@ -77,7 +77,9 @@ Add `--use personal|internal|client|saas` for how the repo will be used (`--pers
 and means `--use personal`). Without it the helper assumes `client`, the strictest common case:
 say so in the report. For a repo that serves projects with different uses, run it once per use.
 Each result carries `stars`, `licence`, `licence_class`, `licence_note`, `licence_review`,
-`use_mode`, `pushed_at`, `gates` and `previously`.
+`use_mode`, `pushed_at`, `gates` and `previously`. A repo that passes every gate also carries
+`owner_age_days` and `install_scripts` (see below). A repo already Skipped by a gate does not, to
+save calls.
 
 - Any entry in `gates` is a Skip, reason is the gate name. `licence-unclear` means the licence was
   not recognised: `licence_note` quotes the start of the LICENSE file, so read the file before
@@ -86,6 +88,14 @@ Each result carries `stars`, `licence`, `licence_class`, `licence_note`, `licenc
   GPL code in something handed to a client). Quote it in the report, say what it means for this
   project, and a repo cannot be High unless the reason names the licence. This is a guide, not
   legal advice, and the report must not say the user "may" use it.
+- `owner_age_days` (how old the owner's GitHub account is) and `install_scripts` (which of
+  `preinstall`, `install`, `postinstall` the root `package.json` defines) are facts, not verdicts.
+  Put them next to the repo in the report. Never write "safe" or "unsafe" from them. A hook is
+  common and often harmless (n8n and Supabase use `preinstall` to enforce a package manager), so
+  say what it is. If it matters to the decision, read that script in the repo first. `[]` means
+  checked and none; `null` means not checked (no root `package.json`, or the lookup failed, in
+  which case `extras_error` says why). Only the root file is read, so a monorepo's packages and
+  non-JavaScript installers such as `setup.py` are not covered.
 - `error` with `unverified: true` means the lookup failed. Rate it on what you can see, mark it
   `unverified`, never fill in a number.
 - `previously` is the last verdict. Reuse it unless something concrete changed: a new release,
