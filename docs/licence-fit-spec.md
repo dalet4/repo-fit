@@ -1,6 +1,6 @@
 # Licence fit: spec
 
-Status: draft, not built. This is a guide to what a licence means for how you use a repo. It is not legal advice.
+Status: built with the proposed defaults (`client` default, open-core as `review`, four modes). One deviation: a repo with no licence at all does not trigger the extra LICENSE fetch, only `NOASSERTION` and `Other` do. This is a guide to what a licence means for how you use a repo. It is not legal advice.
 
 ## Problem
 

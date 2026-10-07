@@ -46,7 +46,7 @@ limit (about 10 searches a minute).
    and keeps a short `.repo-fit/profile.md` including the frictions you name.
 2. **Search**: turns that into GitHub queries for repos pushed in the last N days.
 3. **Facts**: for each candidate, fetches stars, licence, last push, age and archived status, and
-   applies hard gates (archived, unmaintained, no or non-commercial licence, brand-new
+   applies hard gates (archived, unmaintained, no, non-commercial or source-available licence for client work, brand-new
    single-author repo). Search snippets are never trusted for numbers.
 4. **Judge**: High needs a named project, a named friction and a first step you could run today.
 5. **Report**: `repo-fit-reports/YYYY-MM-DD.md`, with tick boxes you fill in. Ticked boxes are

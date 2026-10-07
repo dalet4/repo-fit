@@ -28,7 +28,9 @@ properly. They are cut at 6000 characters, so open the full file if it matters.
 
 Write a short `./.repo-fit/profile.md` once, and reuse it on later runs unless a manifest changed:
 
-- One line per project: what it is, the stack, who it is for.
+- One line per project: what it is, the stack, who it is for, and how it is used: `personal`,
+  `internal` (inside the user's own business), `client` (code handed to a client) or `saas`
+  (hosted for others). Ask once if unclear. It decides how licences are judged in step 3.
 - A `## Frictions` section: real problems the user has named (slow tests, manual deploys, no auth).
   Ask the user for these once. They are what makes a recommendation specific rather than generic.
 - A `## Already have` section: tools, skills, MCP servers and hooks already installed. Fill it
@@ -71,11 +73,19 @@ report that omits them cannot be repeated or checked. They go in the report's `#
 python3 scripts/repo_fit.py facts owner/repo [owner/repo...]
 ```
 
-Add `--personal` if the user only uses tools for personal projects (non-commercial licences are
-then allowed). Each result carries `stars`, `licence`, `pushed_at`, `gates` and `previously`.
+Add `--use personal|internal|client|saas` for how the repo will be used (`--personal` still works
+and means `--use personal`). Without it the helper assumes `client`, the strictest common case:
+say so in the report. For a repo that serves projects with different uses, run it once per use.
+Each result carries `stars`, `licence`, `licence_class`, `licence_note`, `licence_review`,
+`use_mode`, `pushed_at`, `gates` and `previously`.
 
-- Any entry in `gates` is a Skip, reason is the gate name. `licence-unclear` means open the
-  LICENSE file before deciding. `noncommercial` is a Skip for anyone using it for paid work.
+- Any entry in `gates` is a Skip, reason is the gate name. `licence-unclear` means the licence was
+  not recognised: `licence_note` quotes the start of the LICENSE file, so read the file before
+  deciding. `noncommercial` and `source-available` are a Skip for paid work.
+- `licence_review` is not a Skip. It means the licence has conditions for this use (for example
+  GPL code in something handed to a client). Quote it in the report, say what it means for this
+  project, and a repo cannot be High unless the reason names the licence. This is a guide, not
+  legal advice, and the report must not say the user "may" use it.
 - `error` with `unverified: true` means the lookup failed. Rate it on what you can see, mark it
   `unverified`, never fill in a number.
 - `previously` is the last verdict. Reuse it unless something concrete changed: a new release,
