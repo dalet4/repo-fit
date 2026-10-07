@@ -17,8 +17,22 @@ git clone https://github.com/dalet4/repo-fit ~/.claude/skills/repo-fit
 
 Then ask: "run repo-fit on ~/code/my-app and ~/code/client-site".
 
-Other agents: point your agent's instructions at `SKILL.md`. The helper is a plain command line
-script, so any agent that can run Python can use it. (Only tested with Claude Code so far.)
+Other editors and agents (Cursor, Codex, Gemini CLI, Zed, VS Code, Windsurf, Cline, Junie, Goose
+and others that read the [Agent Skills](https://agentskills.io/specification) format), from your
+project folder:
+
+```
+npx skills add dalet4/repo-fit -a cursor
+```
+
+Swap `cursor` for your agent's name, or leave `-a` off to choose from a list. This copies the skill
+into that agent's skills folder (`.agents/skills/` for the agents that share it). The installer
+sends anonymous usage data; set `DISABLE_TELEMETRY=1` to switch that off. Review the skill before
+use, since an installed skill runs with your agent's permissions.
+
+Tested: the install lands the files and `scripts/repo_fit.py` runs from the installed location.
+Not yet tested: loading the skill inside each editor. Only Claude Code has run it end to end so far.
+The helper is a plain command line script, so any agent that can run Python can use it.
 
 You need Python 3 and internet access. Set `GITHUB_TOKEN` to avoid the unauthenticated rate
 limit (about 10 searches a minute).
