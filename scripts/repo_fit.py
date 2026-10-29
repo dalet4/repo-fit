@@ -270,7 +270,8 @@ def search(queries, days, min_stars, limit):
             if r["full_name"] not in seen:
                 seen.add(r["full_name"])
                 out.append({"repo": r["full_name"], "stars": r["stargazers_count"],
-                            "description": r.get("description"), "pushed_at": r["pushed_at"], "query": q})
+                            "description": r.get("description"), "pushed_at": r["pushed_at"],
+                            "created_at": r["created_at"], "query": q})
     return {"candidates": out, "errors": errors}
 
 
