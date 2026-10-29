@@ -290,7 +290,8 @@ class Search(unittest.TestCase):
             return repo_fit.search(list(queries), **args), calls
 
     def item(self, slug, stars=100):
-        return {"full_name": slug, "stargazers_count": stars, "description": "x", "pushed_at": "2026-10-01T00:00:00Z"}
+        return {"full_name": slug, "stargazers_count": stars, "description": "x", "pushed_at": "2026-10-01T00:00:00Z",
+                "created_at": "2026-09-20T00:00:00Z"}
 
     def test_builds_the_query_with_window_star_floor_sort_and_limit(self):
         from datetime import date, timedelta
@@ -307,7 +308,8 @@ class Search(unittest.TestCase):
         out, _ = self.run_search([{"items": [self.item("a/one", 42)]}], queries=["q1"])
         self.assertEqual(out["errors"], [])
         self.assertEqual(out["candidates"], [{"repo": "a/one", "stars": 42, "description": "x",
-                                              "pushed_at": "2026-10-01T00:00:00Z", "query": "q1"}])
+                                              "pushed_at": "2026-10-01T00:00:00Z", "created_at": "2026-09-20T00:00:00Z",
+                                              "query": "q1"}])
 
     def test_a_repo_found_by_two_queries_appears_once_under_the_first(self):
         out, _ = self.run_search([{"items": [self.item("a/one"), self.item("a/two")]},
